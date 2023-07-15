@@ -38,6 +38,8 @@ from qgis.core import (QgsProcessing,
                        QgsProcessingParameterFeatureSink,
                        QgsProcessingParameterFile,
                        QgsProcessingParameterString,
+                       QgsProcessingParameterRasterLayer,
+                       QgsProcessingParameterRasterDestination,
                        QgsRasterLayer)
 from qgis.analysis import (QgsRasterCalculator,
                            QgsRasterCalculatorEntry)
@@ -66,48 +68,83 @@ class SlopeIndentifierAlgorithm(QgsProcessingAlgorithm):
     # calling from the QGIS console.
 
     INPUT = 'INPUT'
-    CURRENT_YEAR = 'CURRENT_YEAR'
-    LAST_YEAR = 'LAST_YEAR'
+    OUTPUT_SLOPE = 'OUTPUT_SLOPE'
+    OUTPUT_DX = 'OUTPUT_DX'
+    OUTPUT_DY = 'OUTPUT_DY'
+    OUTPUT_DXX = 'OUTPUT_DXX'
+    OUTPUT_DYY = 'OUTPUT_DYY'
+    OUTPUT_DXY = 'OUTPUT_DXY'
+    OUTPUT_MASK = 'OUTPUT_MASK'
     OUTPUT_DOD = 'OUTPUT_DOD'
 
     def initAlgorithm(self, config):
 
         # INPUT
         self.addParameter(
-            QgsProcessingParameterFile(
+            QgsProcessingParameterRasterLayer(
                 self.INPUT,
-                self.tr('Dossier contenant les DOD (rangés par dossier de site)'),
-                behavior=QgsProcessingParameterFile.Folder,
-                fileFilter='Tous les fichiers (*.*)'
-            )
-        )
-
-        self.addParameter(
-            QgsProcessingParameterString(
-                self.CURRENT_YEAR,
-                'Année x',
-                '2022'
-            )
-        )
-
-        self.addParameter(
-            QgsProcessingParameterString(
-                self.LAST_YEAR,
-                'Année x-1 ans',
-                '2021'
+                self.tr('DOD to correct'),
+                defaultValue=None
             )
         )
 
         # OUTPUT
         self.addParameter(
-            QgsProcessingParameterFile(
-                self.OUTPUT_DOD,
-                self.tr('Dossier contenant les DOD nettoyés (rangés par dossier de site)'),
-                behavior=QgsProcessingParameterFile.Folder,
-                fileFilter='Tous les fichiers (*.*)',
-                defaultValue=None
+            QgsProcessingParameterRasterDestination(
+                self.OUTPUT_SLOPE,
+                self.tr('General slope extracted from the DOD'),
+                optional=True,
             )
         )
+        self.addParameter(
+            QgsProcessingParameterRasterDestination(
+                self.OUTPUT_DX,
+                self.tr('First order partial derivative dx (E-W slope) raster map'),
+                optional=True,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterRasterDestination(
+                self.OUTPUT_DY,
+                self.tr('first order partial derivative dy (N-S slope) raster map'),
+                optional=True,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterRasterDestination(
+                self.OUTPUT_DXX,
+                self.tr('Second order partial derivative dxx raster map'),
+                optional=True,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterRasterDestination(
+                self.OUTPUT_DYY,
+                self.tr('Second order partial derivative dyy raster map'),
+                optional=True,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterRasterDestination(
+                self.OUTPUT_DXY,
+                self.tr('Second order partial derivative dxy raster map'),
+                optional=True,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterRasterDestination(
+                self.OUTPUT_MASK,
+                self.tr('Raster mask generated from slope parameters'),
+                optional=True,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterRasterDestination(
+                self.OUTPUT_DOD,
+                self.tr('DOD cleaned')
+            )
+        )
+
 
     def processAlgorithm(self, parameters, context, feedback):
         """
@@ -118,197 +155,160 @@ class SlopeIndentifierAlgorithm(QgsProcessingAlgorithm):
         # to uniquely identify the feature sink, and must be included in the
         # dictionary returned by the processAlgorithm function.
 
-        dir_dod = self.parameterAsFile(parameters, self.INPUT, context)
-        current_year = self.parameterAsString(parameters, self.CURRENT_YEAR, context)
-        last_year = self.parameterAsString(parameters, self.LAST_YEAR, context)
-        dir_dod_cleaned = self.parameterAsFile(parameters, self.OUTPUT_DOD, context)
+        dod = self.parameterAsRasterLayer(parameters, self.INPUT, context)
 
-        # Iterate over the DODs
-        for root, dirs, files in os.walk(dir_dod):
-            for file in files:
+        dod_slope = self.parameterAsOutputLayer(parameters, self.OUTPUT_SLOPE, context)
+        dod_dx = self.parameterAsOutputLayer(parameters, self.OUTPUT_DX, context)
+        dod_dy = self.parameterAsOutputLayer(parameters, self.OUTPUT_DY, context)
+        dod_dxx = self.parameterAsOutputLayer(parameters, self.OUTPUT_DXX, context)
+        dod_dyy = self.parameterAsOutputLayer(parameters, self.OUTPUT_DYY, context)
+        dod_dxy = self.parameterAsOutputLayer(parameters, self.OUTPUT_DXY, context)
+        slope_mask = self.parameterAsOutputLayer(parameters, self.OUTPUT_MASK, context)
+        dod_cleaned = self.parameterAsOutputLayer(parameters, self.OUTPUT_DOD, context)
 
-                """
-                For process just one site, us this if statement:
-                
-                if file.endswith('.tif') and re.search(rf'NameOfSite_{current_year}_{last_year}',file):
-                """
+        # -----------------------------------------
+        # COMPUTE SLOPE PARAMETERS
+        # -----------------------------------------
+        feedback.pushInfo(" ")
+        feedback.pushInfo(f"Computing slope parameter")
 
-                if re.search(rf'{last_year}_{current_year}_bowl_cleaned.tif', file):
-                    feedback.pushInfo(f"Processing {file}")
-                    place = re.match(r'(^.*?(?=_))', file)
-                    place = place.group(1)
+        if os.path.exists(dod_slope):
+            feedback.pushInfo("Slopes parameters already computed")
+        else:
+            feedback.pushInfo(f"Computing slopes")
+            params = {
+                'elevation': dod,
+                'format': 0,
+                'precision': 0,
+                '-a': True,
+                '-e': True,
+                '-n': False,
+                'zscale': 1,
+                'min_slope': 0,
+                'slope': dod_slope,
+                'dx': dod_dx,
+                'dy': dod_dy,
+                'dxx': dod_dxx,
+                'dyy': dod_dyy,
+                'dxy': dod_dxy,
+                'GRASS_REGION_PARAMETER': None,
+                'GRASS_REGION_CELLSIZE_PARAMETER': 0,
+                'GRASS_RASTER_FORMAT_OPT': '',
+                'GRASS_RASTER_FORMAT_META': ''
+            }
 
-                    # Subdirectory containing intermediate layer
-                    dir_detail = f"{dir_dod_cleaned}/{place}/SLOPE_DETAILS"
-                    # Create it if it doesn't already exists
-                    if not os.path.exists(dir_detail):
-                        os.makedirs(dir_detail)
+            slopes_lyr = processing.run(
+                "grass7:r.slope.aspect",
+                params,
+                context=context,
+                feedback=feedback
+            )
 
-                    # -----------------------------------------
-                    # COMPUTE SLOPE PARAMETERS
-                    # -----------------------------------------
+        # -----------------------------------------
+        # CREATE MASK LAYER
+        # -----------------------------------------
+        feedback.pushInfo(" ")
+        feedback.pushInfo("Generating raster mask layer")
 
-                    feedback.pushInfo(f"Computing slope for {file}")
+        layers = [
+            QgsRasterLayer(slopes_lyr['slope']),
+            QgsRasterLayer(slopes_lyr['dx']),
+            QgsRasterLayer(slopes_lyr['dy']),
+            QgsRasterLayer(slopes_lyr['dxx']),
+            QgsRasterLayer(slopes_lyr['dyy']),
+            QgsRasterLayer(slopes_lyr['dxy'])
+        ]
 
-                    dod_path = f'{dir_dod}/{place}/{file}'
-                    slope_path = f'{dir_detail}/{place}_{last_year}_{current_year}_DOD_slope.tif'
-                    dx_path = f'{dir_detail}/{place}_{last_year}_{current_year}_DOD_slope_dx.tif'
-                    dy_path = f'{dir_detail}/{place}_{last_year}_{current_year}_DOD_slope_dy.tif'
-                    dxx_path = f'{dir_detail}/{place}_{last_year}_{current_year}_DOD_slope_dxx.tif'
-                    dyy_path = f'{dir_detail}/{place}_{last_year}_{current_year}_DOD_slope_dyy.tif'
-                    dxy_path = f'{dir_detail}/{place}_{last_year}_{current_year}_DOD_slope_dxy.tif'
+        # Paramètre de la calculatrice raster
+        entries = []
+        for idx, layer in enumerate(layers):
+            entry = QgsRasterCalculatorEntry()
+            entry.ref = f'ras{idx}@1'
+            entry.raster = layer
+            entry.bandNumber = 1
+            entries.append(entry)
 
-                    if os.path.exists(slope_path):
-                        feedback.pushInfo("Slopes parameters already computed")
-                    else:
-                        feedback.pushInfo(f"Computing slopes")
-                        params = {
-                            'elevation': dod_path,
-                            'format': 0,
-                            'precision': 0,
-                            '-a': True,
-                            '-e': True,
-                            '-n': False,
-                            'zscale': 1,
-                            'min_slope': 0,
-                            'slope': slope_path,
-                            'dx': dx_path,
-                            'dy': dy_path,
-                            'dxx': dxx_path,
-                            'dyy': dyy_path,
-                            'dxy': dxy_path,
-                            'GRASS_REGION_PARAMETER': None,
-                            'GRASS_REGION_CELLSIZE_PARAMETER': 0,
-                            'GRASS_RASTER_FORMAT_OPT': '',
-                            'GRASS_RASTER_FORMAT_META': ''
-                        }
+        calc = QgsRasterCalculator(
+            "(abs('ras0@1')>=77) OR (abs('ras1@1')>=5) OR (abs('ras2@1')>=5) OR (abs('ras3@1')>=150) OR (abs('ras4@1')>=150) OR (abs('ras5@1')>=40)",
+            # Expression
+            slope_mask,  # Output
+            'GTiff',  # Format
+            dod.extent(), dod.width(), dod.height(),  # Extents
+            entries  # Les rasters en entrées
+        )
+        calc.processCalculation()
 
-                        processing.run(
-                            "grass7:r.slope.aspect",
-                            params,
-                            context=context,
-                            feedback=feedback
-                        )
+        # POLYGONIZE
+        feedback.pushInfo(" ")
+        feedback.pushInfo("Polygonizing")
 
-                        feedback.pushInfo(f"Compute of slopes done")
+        params = {
+            'INPUT': slope_mask,
+            'BAND': 1,
+            'FIELD': 'DN',
+            'EIGHT_CONNECTEDNESS': False,
+            'EXTRA': '',
+            'OUTPUT': 'TEMPORARY_OUTPUT'
+        }
 
-                    # -----------------------------------------
-                    # CREATE MASK LAYER
-                    # -----------------------------------------
+        mask_pol = processing.run(
+            "gdal:polygonize",
+            params,
+            context=context,
+            feedback=feedback
+        )
+        mask_pol_lyr = mask_pol['OUTPUT']
 
-                    slope_mask = f'{dir_detail}/{place}_{last_year}_{current_year}_DOD_slope_mask.tif'
+        # -----------------------------------------
+        # Extract slope
+        # -----------------------------------------
+        feedback.pushInfo(" ")
+        feedback.pushInfo("Filtering vectorial mask")
 
-                    if os.path.exists(slope_mask):
-                        feedback.pushInfo('Raster mask already generated')
-                    else:
-                        feedback.pushInfo('Creating raster mask layer')
+        alg_params = {
+            'EXPRESSION': '"DN" = 0',
+            'INPUT': mask_pol_lyr,
+            'OUTPUT': 'TEMPORARY_OUTPUT'
+        }
+        poly_filtered = processing.run('native:extractbyexpression',
+                                alg_params,
+                                context=context,
+                                feedback=feedback)
+        poly_filtered_lyr = poly_filtered['OUTPUT']
 
-                        layers = [
-                            QgsRasterLayer(slope_path),
-                            QgsRasterLayer(dx_path),
-                            QgsRasterLayer(dy_path),
-                            QgsRasterLayer(dxx_path),
-                            QgsRasterLayer(dyy_path),
-                            QgsRasterLayer(dxy_path)
-                        ]
+        # -----------------------------------------
+        # CLIP DOD BY MASK
+        # -----------------------------------------
+        feedback.pushInfo(" ")
+        feedback.pushInfo("Clip DOD by mask")
 
-                        # Paramètre de la calculatrice raster
-                        entries = []
+        params = {
+            'INPUT': dod,
+            'MASK': poly_filtered_lyr,
+            'SOURCE_CRS': None,
+            'TARGET_CRS': None,
+            'TARGET_EXTENT': None,
+            'NODATA': None,
+            'ALPHA_BAND': False,
+            'CROP_TO_CUTLINE': True,
+            'KEEP_RESOLUTION': False,
+            'SET_RESOLUTION': False,
+            'X_RESOLUTION': None,
+            'Y_RESOLUTION': None,
+            'MULTITHREADING': False,
+            'OPTIONS': '',
+            'DATA_TYPE': 0,
+            'EXTRA': '',
+            'OUTPUT': dod_cleaned
+        }
 
-                        for idx, layer in enumerate(layers):
-                            entry = QgsRasterCalculatorEntry()
-                            entry.ref = f'ras{idx}@1'
-                            entry.raster = layer
-                            entry.bandNumber = 1
-                            entries.append(entry)
-
-                        calc = QgsRasterCalculator(
-                            "(abs('ras0@1')>=77) OR (abs('ras1@1')>=5) OR (abs('ras2@1')>=5) OR (abs('ras3@1')>=150) OR (abs('ras4@1')>=150) OR (abs('ras5@1')>=40)",
-                            # Expression
-                            slope_mask,  # Output
-                            'GTiff',  # Format
-                            layers[1].extent(), layers[1].width(), layers[1].height(),  # Extents
-                            entries  # Les rasters en entrées
-                        )
-                        calc.processCalculation()
-
-                        feedback.pushInfo("Raster mask layer generated")
-
-                    # POLYGONIZE
-
-                    slope_mask_pol = f'{dir_detail}/{place}_{last_year}_{current_year}_DOD_slope_mask.shp'
-
-                    if os.path.exists(slope_mask_pol):
-                        feedback.pushInfo('Shapefile mask already exists')
-                    else:
-                        feedback.pushInfo("Polygonizing")
-                        params = {
-                            'INPUT': slope_mask,
-                            'BAND': 1,
-                            'FIELD': 'DN',
-                            'EIGHT_CONNECTEDNESS': False,
-                            'EXTRA': '',
-                            'OUTPUT': slope_mask_pol
-                        }
-
-                        processing.run(
-                            "gdal:polygonize",
-                            params,
-                            context=context,
-                            feedback=feedback
-                        )
-
-                        feedback.pushInfo("Polygonize done")
-
-                        # Conserve only slopes
-
-                        feedback.pushInfo('Filtering vectorial mask')
-
-                        mask_shp = gpd.read_file(slope_mask_pol)
-                        mask_shp = mask_shp.loc[mask_shp.DN == 0]
-                        mask_shp.to_file(slope_mask_pol, driver="ESRI Shapefile")
-
-                        feedback.pushInfo('Filtering vectorial mask done')
-
-                    # -----------------------------------------
-                    # CLIP DOD BY MASK
-                    # -----------------------------------------
-
-                    dod_cleaned = f"{dir_dod_cleaned}/{place}/{place}_{last_year}_{current_year}_DOD_be_cleaned.tif"
-
-                    if os.path.exists(dod_cleaned):
-                        feedback.pushInfo("Raster already clipped")
-                    else:
-                        feedback.pushInfo("Clipping DOD by mask")
-
-                        params = {
-                            'INPUT': dod_path,
-                            'MASK': slope_mask_pol,
-                            'SOURCE_CRS': None,
-                            'TARGET_CRS': None,
-                            'TARGET_EXTENT': None,
-                            'NODATA': None,
-                            'ALPHA_BAND': False,
-                            'CROP_TO_CUTLINE': True,
-                            'KEEP_RESOLUTION': False,
-                            'SET_RESOLUTION': False,
-                            'X_RESOLUTION': None,
-                            'Y_RESOLUTION': None,
-                            'MULTITHREADING': False,
-                            'OPTIONS': '',
-                            'DATA_TYPE': 0,
-                            'EXTRA': '',
-                            'OUTPUT': dod_cleaned
-                        }
-
-                        processing.run(
-                            "gdal:cliprasterbymasklayer",
-                            params,
-                            context=context,
-                            feedback=feedback
-                        )
-
-                        feedback.pushInfo("Clip done with success")
+        dod_clip = processing.run(
+            "gdal:cliprasterbymasklayer",
+            params,
+            context=context,
+            feedback=feedback
+        )
+        dod_clip_lyr = dod_clip['OUTPUT']
 
         # Return the results of the algorithm. In this case our only result is
         # the feature sink which contains the processed features, but some
@@ -316,7 +316,15 @@ class SlopeIndentifierAlgorithm(QgsProcessingAlgorithm):
         # statistics, etc. These should all be included in the returned
         # dictionary, with keys matching the feature corresponding parameter
         # or output names.
-        return {}
+        return {
+            self.OUTPUT_DX: dod_dx,
+            self.OUTPUT_DY: dod_dy,
+            self.OUTPUT_DXX: dod_dxx,
+            self.OUTPUT_DYY: dod_dyy,
+            self.OUTPUT_DXY: dod_dxy,
+            self.OUTPUT_MASK: slope_mask,
+            self.OUTPUT_DOD: dod_clip_lyr,
+        }
 
     def name(self):
         """
