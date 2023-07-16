@@ -393,15 +393,15 @@ class SlopeIndentifierAlgorithm(QgsProcessingAlgorithm):
             'GRASS_RASTER_FORMAT_META': ''
         }
 
-            slopes_lyr = processing.run(
-                "grass7:r.slope.aspect",
-                params,
-                context=context,
-                feedback=feedback
-            )
+        slopes_lyr = processing.run(
+            "grass7:r.slope.aspect",
+            params,
+            context=context,
+            feedback=feedback
+        )
 
         # -----------------------------------------
-        # CREATE MASK LAYER
+        # CREATE MASK LAYER FROM SLOPES
         # -----------------------------------------
         feedback.pushInfo(" ")
         feedback.pushInfo("Generating raster mask layer")
@@ -425,7 +425,7 @@ class SlopeIndentifierAlgorithm(QgsProcessingAlgorithm):
             entries.append(entry)
 
         calc = QgsRasterCalculator(
-            "(abs('ras0@1')>=77) OR (abs('ras1@1')>=5) OR (abs('ras2@1')>=5) OR (abs('ras3@1')>=150) OR (abs('ras4@1')>=150) OR (abs('ras5@1')>=40)",
+            "(abs('ras0@1')>=45) OR (abs('ras1@1')>=5) OR (abs('ras2@1')>=5) OR (abs('ras3@1')>=150) OR (abs('ras4@1')>=150) OR (abs('ras5@1')>=40)",
             # Expression
             slope_mask,  # Output
             'GTiff',  # Format
@@ -434,7 +434,9 @@ class SlopeIndentifierAlgorithm(QgsProcessingAlgorithm):
         )
         calc.processCalculation()
 
-        # POLYGONIZE
+        # --------------------------------------------
+        # Plygonize
+        # --------------------------------------------
         feedback.pushInfo(" ")
         feedback.pushInfo("Polygonizing")
 
@@ -456,10 +458,10 @@ class SlopeIndentifierAlgorithm(QgsProcessingAlgorithm):
         mask_pol_lyr = mask_pol['OUTPUT']
 
         # -----------------------------------------
-        # Extract slope
+        # Extract non slope
         # -----------------------------------------
         feedback.pushInfo(" ")
-        feedback.pushInfo("Filtering vectorial mask")
+        feedback.pushInfo("Get relevant value from polygonized layer")
 
         alg_params = {
             'EXPRESSION': '"DN" = 0',
@@ -467,10 +469,87 @@ class SlopeIndentifierAlgorithm(QgsProcessingAlgorithm):
             'OUTPUT': 'TEMPORARY_OUTPUT'
         }
         poly_filtered = processing.run('native:extractbyexpression',
+                                       alg_params,
+                                       context=context,
+                                       feedback=feedback)['OUTPUT']
+
+        # -----------------------------------------
+        # Delete holes
+        # -----------------------------------------
+        feedback.pushInfo(" ")
+        feedback.pushInfo("Remove holes")
+
+        poly_holes = processing.run("native:deleteholes",
+                                     {
+                                         'INPUT': poly_filtered,
+                                         'MIN_AREA': 0.01, 'OUTPUT': 'TEMPORARY_OUTPUT'
+                                     },
+                                     context=context,
+                                     feedback=feedback)["OUTPUT"]
+
+        # -----------------------------------------
+        # Difference
+        # -----------------------------------------
+        feedback.pushInfo(" ")
+        feedback.pushInfo("Fix geometry")
+
+        poly_filtered_fix = processing.run(
+            "native:fixgeometries",
+            {
+                'INPUT': poly_holes,
+                'METHOD': 1,
+                'OUTPUT': 'TEMPORARY_OUTPUT'
+            },
+            context=context,
+            feedback=feedback
+        )['OUTPUT']
+
+        mask_bloc_vec_fix = processing.run(
+            "native:fixgeometries",
+            {
+                'INPUT': mask_bloc_vec_lyr,
+                'METHOD': 1,
+                'OUTPUT': 'TEMPORARY_OUTPUT'
+            },
+            context=context,
+            feedback=feedback
+        )['OUTPUT']
+
+        # Spatial Index
+        feedback.pushInfo(" ")
+        feedback.pushInfo("Add spatial index")
+
+        mask_bloc_vec_fix.dataProvider().createSpatialIndex()
+        poly_filtered_fix.dataProvider().createSpatialIndex()
+
+        feedback.pushInfo(" ")
+        feedback.pushInfo("Difference")
+
+        alg_params = {
+            'INPUT': poly_filtered_fix,
+            'OVERLAY': mask_bloc_vec_fix,
+            'OUTPUT': 'TEMPORARY_OUTPUT'
+        }
+
+        diff = processing.run("native:difference",
+                              alg_params,
+                              context=context,
+                              feedback=feedback)
+        diff_lyr = diff['OUTPUT']
+
+        # -----------------------------------------
+        # Merge layers
+        # -----------------------------------------
+
+        alg_params = {
+            'LAYERS': [diff_lyr, mask_bloc_vec_fix],
+            'OUTPUT': mask_merged
+        }
+
+        merged = processing.run("native:mergevectorlayers",
                                 alg_params,
                                 context=context,
-                                feedback=feedback)
-        poly_filtered_lyr = poly_filtered['OUTPUT']
+                                feedback=feedback)["OUTPUT"]
 
         # -----------------------------------------
         # CLIP DOD BY MASK
