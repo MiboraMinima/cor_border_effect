@@ -237,32 +237,161 @@ class SlopeIndentifierAlgorithm(QgsProcessingAlgorithm):
         # Create mask layer
         # -----------------------------------------
         feedback.pushInfo(" ")
-        feedback.pushInfo(f"Computing slope parameter")
+        feedback.pushInfo("Extract changes")
 
-        if os.path.exists(dod_slope):
-            feedback.pushInfo("Slopes parameters already computed")
-        else:
-            feedback.pushInfo(f"Computing slopes")
-            params = {
-                'elevation': dod,
-                'format': 0,
-                'precision': 0,
-                '-a': True,
-                '-e': True,
-                '-n': False,
-                'zscale': 1,
-                'min_slope': 0,
-                'slope': dod_slope,
-                'dx': dod_dx,
-                'dy': dod_dy,
-                'dxx': dod_dxx,
-                'dyy': dod_dyy,
-                'dxy': dod_dxy,
-                'GRASS_REGION_PARAMETER': None,
-                'GRASS_REGION_CELLSIZE_PARAMETER': 0,
-                'GRASS_RASTER_FORMAT_OPT': '',
-                'GRASS_RASTER_FORMAT_META': ''
-            }
+        mask = QgsProcessingUtils.generateTempFilename('mask_layer.tif')
+        feedback.pushInfo(f"Generated temp layer is : {mask}")
+
+        entries = []
+        ras = QgsRasterCalculatorEntry()
+        ras.ref = 'dod@1'
+        ras.raster = dod
+        ras.bandNumber = 1
+        entries.append(ras)
+
+        calc = QgsRasterCalculator(
+            f"(dod@1 <= {lower_threshold}) OR (dod@1 >= {upper_threshold})",  # Expression
+            mask,  # Output
+            'GTiff',  # Format
+            dod.extent(), dod.width(), dod.height(),  # Extents
+            entries  # Les rasters en entrées
+        )
+        calc.processCalculation()
+
+        # -----------------------------------------
+        # Polygonize mask
+        # -----------------------------------------
+        feedback.pushInfo(" ")
+        feedback.pushInfo("Polygonizing")
+
+        params = {
+            'INPUT': mask,
+            'BAND': 1,
+            'FIELD': 'DN',
+            'EIGHT_CONNECTEDNESS': False,
+            'EXTRA': '',
+            'OUTPUT': 'TEMPORARY_OUTPUT'
+        }
+
+        mask_bloc_pol = processing.run(
+            "gdal:polygonize",
+            params,
+            context=context,
+            feedback=feedback
+        )
+        mask_bloc_pol_lyr = mask_bloc_pol['OUTPUT']
+
+        # -----------------------------------------
+        # Extract block
+        # -----------------------------------------
+        feedback.pushInfo(" ")
+        feedback.pushInfo("Get changes in vectorial layer")
+
+        alg_params = {
+            'EXPRESSION': '"DN" = 1',
+            'INPUT': mask_bloc_pol_lyr,
+            'OUTPUT': 'TEMPORARY_OUTPUT'
+        }
+        block = processing.run('native:extractbyexpression',
+                               alg_params,
+                               context=context,
+                               feedback=feedback)
+        block_lyr = block['OUTPUT']
+
+        # -----------------------------------------
+        # Delete holes
+        # -----------------------------------------
+        feedback.pushInfo(" ")
+        feedback.pushInfo("Remove holes")
+
+        block_holes = processing.run("native:deleteholes",
+                                     {
+                                         'INPUT': block_lyr,
+                                         'MIN_AREA': 0, 'OUTPUT': 'TEMPORARY_OUTPUT'
+                                     },
+                                     context=context,
+                                     feedback=feedback)
+        block_holes_lyr = block_holes['OUTPUT']
+
+        # -----------------------------------------
+        # Compute Area
+        # -----------------------------------------
+        feedback.pushInfo(" ")
+        feedback.pushInfo("Computing area")
+
+        alg_params = {
+            'FIELD_LENGTH': 20,
+            'FIELD_NAME': 'area',
+            'FIELD_PRECISION': 3,
+            'FIELD_TYPE': 0,  # Float
+            'FORMULA': '$area*1000',
+            'INPUT': block_holes_lyr,
+            'OUTPUT': 'TEMPORARY_OUTPUT'
+        }
+        block_area = processing.run('native:fieldcalculator',
+                                    alg_params,
+                                    context=context,
+                                    feedback=feedback)
+        block_area_lyr = block_area['OUTPUT']
+
+        # -----------------------------------------
+        # Compute Roundness
+        # -----------------------------------------
+        feedback.pushInfo(" ")
+        feedback.pushInfo("Computing roundness")
+
+        block_round = processing.run("native:roundness",
+                                     {
+                                         'INPUT': block_area_lyr,
+                                         'OUTPUT': 'TEMPORARY_OUTPUT'
+                                     },
+                                     context=context,
+                                     feedback=feedback)
+        block_round_lyr = block_round['OUTPUT']
+
+        # -----------------------------------------
+        # Extract from indices
+        # -----------------------------------------
+        feedback.pushInfo(" ")
+        feedback.pushInfo("Filtering layer")
+
+        alg_params = {
+            'EXPRESSION': '"area" >= 30 AND "roundness" >= 0.15',
+            'INPUT': block_round_lyr,
+            'OUTPUT': changes
+        }
+        mask_bloc_vec = processing.run('native:extractbyexpression',
+                                       alg_params,
+                                       context=context,
+                                       feedback=feedback)
+        mask_bloc_vec_lyr = mask_bloc_vec['OUTPUT']
+
+        # =========================================
+        # COMPUTE SLOPE PARAMETERS
+        # =========================================
+        feedback.pushInfo(" ")
+        feedback.pushInfo(f"Computing slope parameter from DOD")
+
+        params = {
+            'elevation': dod,
+            'format': 0,
+            'precision': 0,
+            '-a': True,
+            '-e': True,
+            '-n': False,
+            'zscale': 1,
+            'min_slope': 0,
+            'slope': dod_slope,
+            'dx': dod_dx,
+            'dy': dod_dy,
+            'dxx': dod_dxx,
+            'dyy': dod_dyy,
+            'dxy': dod_dxy,
+            'GRASS_REGION_PARAMETER': None,
+            'GRASS_REGION_CELLSIZE_PARAMETER': 0,
+            'GRASS_RASTER_FORMAT_OPT': '',
+            'GRASS_RASTER_FORMAT_META': ''
+        }
 
             slopes_lyr = processing.run(
                 "grass7:r.slope.aspect",
