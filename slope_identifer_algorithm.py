@@ -187,8 +187,54 @@ class SlopeIndentifierAlgorithm(QgsProcessingAlgorithm):
         mask_merged = self.parameterAsOutputLayer(parameters, self.OUTPUT_MERGED, context)
         dod_cleaned = self.parameterAsOutputLayer(parameters, self.OUTPUT_DOD, context)
 
+        # =========================================
+        # DOD Mask blocs
+        # =========================================
+        # Find threshold
         # -----------------------------------------
-        # COMPUTE SLOPE PARAMETERS
+        feedback.pushInfo(" ")
+        feedback.pushInfo("Computing thresholds for changes identification")
+
+        dod_path = dod.dataProvider().dataSourceUri()
+        dataset = gdal.Open(dod_path)
+
+        # Get the first band
+        band = dataset.GetRasterBand(1)
+
+        # Read the band data as an array
+        band_array = band.ReadAsArray()
+
+        # Get NoData value
+        nodata = band.GetNoDataValue()
+        feedback.pushInfo(f"{nodata}")
+
+        masked_array = np.ma.masked_values(band_array, nodata)
+
+        # Min / max
+        min = np.min(masked_array)
+        feedback.pushInfo(f"Min : {min}")
+
+        max = np.max(masked_array)
+        feedback.pushInfo(f"Max : {max}")
+
+
+        # Calculate Q3 and IQR
+        q3 = np.percentile(masked_array.compressed(), 75)
+        feedback.pushInfo(f"q3 : {q3}")
+        q1 = np.percentile(masked_array.compressed(), 25)
+        feedback.pushInfo(f"q1 : {q1}")
+        iqr = q3 - q1
+        feedback.pushInfo(f"iqr : {iqr}")
+
+        # Calculate upper and lower thresholds
+        upper_threshold = q3 + 8 * iqr
+        lower_threshold = q1 - 8 * iqr
+
+        feedback.pushInfo(f"Upper threshold: {upper_threshold}")
+        feedback.pushInfo(f"Lower threshold: {lower_threshold}")
+
+        # -----------------------------------------
+        # Create mask layer
         # -----------------------------------------
         feedback.pushInfo(" ")
         feedback.pushInfo(f"Computing slope parameter")
