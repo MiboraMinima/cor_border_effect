@@ -40,11 +40,17 @@ from qgis.core import (QgsProcessing,
                        QgsProcessingParameterString,
                        QgsProcessingParameterRasterLayer,
                        QgsProcessingParameterRasterDestination,
-                       QgsRasterLayer)
+                       QgsProcessingParameterVectorDestination,
+                       QgsRasterLayer,
+                       QgsVectorLayer,
+                       QgsSpatialIndex,
+                       QgsProcessingUtils)
 from qgis.analysis import (QgsRasterCalculator,
                            QgsRasterCalculatorEntry)
 import processing
 import os
+import numpy as np
+from osgeo import gdal
 import re
 import geopandas as gpd
 
@@ -74,11 +80,12 @@ class SlopeIndentifierAlgorithm(QgsProcessingAlgorithm):
     OUTPUT_DXX = 'OUTPUT_DXX'
     OUTPUT_DYY = 'OUTPUT_DYY'
     OUTPUT_DXY = 'OUTPUT_DXY'
+    OUTPUT_CHANGES = 'OUTPUT_CHANGES'
     OUTPUT_MASK = 'OUTPUT_MASK'
+    OUTPUT_MERGED = 'OUTPUT_MERGED'
     OUTPUT_DOD = 'OUTPUT_DOD'
 
     def initAlgorithm(self, config):
-
         # INPUT
         self.addParameter(
             QgsProcessingParameterRasterLayer(
@@ -139,12 +146,25 @@ class SlopeIndentifierAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
+            QgsProcessingParameterVectorDestination(
+                self.OUTPUT_CHANGES,
+                self.tr('Identified changes'),
+                optional=True,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterVectorDestination(
+                self.OUTPUT_MERGED,
+                self.tr('Merged mask'),
+                optional=True,
+            )
+        )
+        self.addParameter(
             QgsProcessingParameterRasterDestination(
                 self.OUTPUT_DOD,
                 self.tr('DOD cleaned')
             )
         )
-
 
     def processAlgorithm(self, parameters, context, feedback):
         """
@@ -156,14 +176,15 @@ class SlopeIndentifierAlgorithm(QgsProcessingAlgorithm):
         # dictionary returned by the processAlgorithm function.
 
         dod = self.parameterAsRasterLayer(parameters, self.INPUT, context)
-
         dod_slope = self.parameterAsOutputLayer(parameters, self.OUTPUT_SLOPE, context)
         dod_dx = self.parameterAsOutputLayer(parameters, self.OUTPUT_DX, context)
         dod_dy = self.parameterAsOutputLayer(parameters, self.OUTPUT_DY, context)
         dod_dxx = self.parameterAsOutputLayer(parameters, self.OUTPUT_DXX, context)
         dod_dyy = self.parameterAsOutputLayer(parameters, self.OUTPUT_DYY, context)
         dod_dxy = self.parameterAsOutputLayer(parameters, self.OUTPUT_DXY, context)
+        changes = self.parameterAsOutputLayer(parameters, self.OUTPUT_CHANGES, context)
         slope_mask = self.parameterAsOutputLayer(parameters, self.OUTPUT_MASK, context)
+        mask_merged = self.parameterAsOutputLayer(parameters, self.OUTPUT_MERGED, context)
         dod_cleaned = self.parameterAsOutputLayer(parameters, self.OUTPUT_DOD, context)
 
         # -----------------------------------------
