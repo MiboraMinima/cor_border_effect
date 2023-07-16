@@ -555,11 +555,11 @@ class SlopeIndentifierAlgorithm(QgsProcessingAlgorithm):
         # CLIP DOD BY MASK
         # -----------------------------------------
         feedback.pushInfo(" ")
-        feedback.pushInfo("Clip DOD by mask")
+        feedback.pushInfo("Clip original DOD by mask")
 
         params = {
             'INPUT': dod,
-            'MASK': poly_filtered_lyr,
+            'MASK': merged,
             'SOURCE_CRS': None,
             'TARGET_CRS': None,
             'TARGET_EXTENT': None,
@@ -592,13 +592,15 @@ class SlopeIndentifierAlgorithm(QgsProcessingAlgorithm):
         # dictionary, with keys matching the feature corresponding parameter
         # or output names.
         return {
+            self.OUTPUT_CHANGES: mask_bloc_vec_lyr,
             self.OUTPUT_DX: dod_dx,
             self.OUTPUT_DY: dod_dy,
             self.OUTPUT_DXX: dod_dxx,
             self.OUTPUT_DYY: dod_dyy,
             self.OUTPUT_DXY: dod_dxy,
             self.OUTPUT_MASK: slope_mask,
-            self.OUTPUT_DOD: dod_clip_lyr,
+            self.OUTPUT_MERGED: merged,
+            self.OUTPUT_DOD: dod_clip_lyr
         }
 
     def name(self):
