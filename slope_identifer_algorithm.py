@@ -250,7 +250,7 @@ class SlopeIndentifierAlgorithm(QgsProcessingAlgorithm):
         entries.append(ras)
 
         calc = QgsRasterCalculator(
-            f"(dod@1 <= {lower_threshold}) OR (dod@1 >= {upper_threshold})",  # Expression
+            f"(dod@1 <= -0.125) OR (dod@1 >= 0.125)",  # Expression
             mask,  # Output
             'GTiff',  # Format
             dod.extent(), dod.width(), dod.height(),  # Extents
@@ -352,12 +352,25 @@ class SlopeIndentifierAlgorithm(QgsProcessingAlgorithm):
         # -----------------------------------------
         # Extract from indices
         # -----------------------------------------
+        # Get area superior to 30 or area <= 30 and roundness >= 0.15
         feedback.pushInfo(" ")
         feedback.pushInfo("Filtering layer")
 
+        # Extract the big part
         alg_params = {
-            'EXPRESSION': '"area" >= 30 AND "roundness" >= 0.15',
+            'EXPRESSION': '"area" >= 30 OR ("roundness" >= 0.4 AND "area" >= 2)',
             'INPUT': block_round_lyr,
+            'OUTPUT': 'TEMPORARY_OUTPUT'
+        }
+        mask_bloc_vec1 = processing.run('native:extractbyexpression',
+                                       alg_params,
+                                       context=context,
+                                       feedback=feedback)['OUTPUT']
+
+        # Remove the rest
+        alg_params = {
+            'EXPRESSION': 'NOT ("area" <= 120 AND "roundness" <=0.2)',
+            'INPUT': mask_bloc_vec1,
             'OUTPUT': changes
         }
         mask_bloc_vec = processing.run('native:extractbyexpression',
